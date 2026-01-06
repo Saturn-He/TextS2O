@@ -58,13 +58,32 @@ class ClipTextEncoder:
         return torch.cat(features, dim=0)
 
 
+SYSTEM_PROMPT_EN = """System Role: You are a senior expert in Synthetic Aperture Radar (SAR) remote sensing interpretation. Your task is to analyze optical images and translate them into professional technical descriptions of corresponding SAR backscattering characteristics.
+
+Please provide a concise description within 40-60 words.
+
+Task Logic: 
+1. Analyze the physical properties of terrain and objects in the optical image (material, surface roughness, geometric structure).
+2. Translate these properties into radar scattering mechanisms.
+
+Strict Constraints:
+- NO COLORS: Strictly forbid mentioning any color information (red, green, blue, etc.).
+- NO ORIENTATIONS: Strictly forbid directional terms like left, right, top, bottom, etc. Use relative spatial relationships like 'adjacent to', 'surrounded by', or 'interspersed with'.
+- NO OPTICAL ARTIFACTS: Strictly forbid mentioning sunlight, clouds, or lens flares.
+
+Required Vocabulary:
+- Scattering Mechanisms: Specular reflection, Volume scattering, Double-bounce scattering, Surface roughness, Bragg scattering.
+- Material Attributes: High/Low dielectric constant, Metallic, Non-metallic, Moisture content, Concrete, Vegetation density.
+- Structural Patterns: Regular grid, Cluttered texture, Homogeneous area, Discrete point-like targets, Corner reflectors."""
+
+
 class QwenVLTextGenerator:
     def __init__(
         self,
         model_name="Qwen2-VL-72B",
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        prompt: str = "请用简洁中文描述这张图像的场景与主体。",
+        prompt: str = SYSTEM_PROMPT_EN,
         timeout: int = 60,
     ):
         self.model_name = model_name
@@ -167,10 +186,17 @@ def _ensure_pil_image(image):
     return F.to_pil_image(image)
 
 
-def ensure_text_data(sar_paths, opt_paths, output_dir, llm_model_name="Qwen2-VL-72B", transform=None):
+def ensure_text_data(
+    sar_paths,
+    opt_paths,
+    output_dir,
+    llm_model_name="Qwen2-VL-72B",
+    prompt=SYSTEM_PROMPT_EN,
+    transform=None,
+):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    generator = QwenVLTextGenerator(model_name=llm_model_name)
+    generator = QwenVLTextGenerator(model_name=llm_model_name, prompt=prompt)
     for sar_path, opt_path in zip(sar_paths, opt_paths):
         text_path = _text_path_for_sar(sar_path, output_dir)
         if text_path.exists():
