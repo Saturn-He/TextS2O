@@ -19,7 +19,7 @@ from engine_jit import train_one_epoch, evaluate
 
 from denoiser import Denoiser
 from util.datasets import PairedImageDirDataset
-from util.text_encoder import ClipTextEncoder
+from util.text_encoder import ClipTextEncoder, ensure_text_data, load_texts_for_pairs
 
 
 class PairedTransform:
@@ -78,6 +78,12 @@ def get_args_parser():
                         help='Dimensionality of CLIP text features (pooler output).')
     parser.add_argument('--text_encoder_model', default='openai/clip-vit-large-patch14', type=str,
                         help='CLIP text encoder model name.')
+    parser.add_argument('--llm_model_name', default='Qwen2-VL-72B', type=str,
+                        help='LLM model name for text generation.')
+    parser.add_argument('--dataset_name', default='sar2opt', choices=['GF3', 'sar2opt', 'scene'],
+                        help='Dataset name for text storage.')
+    parser.add_argument('--text_split', default='train', choices=['train', 'test'],
+                        help='Text split name for storage.')
 
     parser.add_argument('--seed', default=77, type=int)
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
@@ -173,13 +179,21 @@ def main(args):
         hflip_prob=0.5,
     )
 
+    text_data_dir = os.path.join(
+        "/NAS_data/hjf/JiTtext/TextData",
+        args.llm_model_name,
+        args.dataset_name,
+        args.text_split,
+    )
+
     dataset_train = PairedImageDirDataset(
         args.sar_train_path,
         args.opt_train_path,
         transform=transform_train,
     )
+    ensure_text_data(dataset_train.sar_files, dataset_train.opt_files, text_data_dir, args.llm_model_name)
+    text_inputs = load_texts_for_pairs(dataset_train.sar_files, text_data_dir)
     text_encoder = ClipTextEncoder(model_name=args.text_encoder_model, text_dim=args.text_dim)
-    text_inputs = text_encoder.fetch_texts_for_pairs(dataset_train.sar_files, dataset_train.opt_files)
     text_features = text_encoder.encode_texts(text_inputs)
     dataset_train.set_text_features(text_features)
     print(dataset_train)
@@ -250,10 +264,20 @@ def main(args):
     # Evaluate generation
     if args.evaluate_gen:
         print("Evaluating checkpoint at {} epoch".format(args.start_epoch))
+        if args.text_split == "train":
+            args.text_split = "test"
+            text_data_dir = os.path.join(
+                "/NAS_data/hjf/JiTtext/TextData",
+                args.llm_model_name,
+                args.dataset_name,
+                args.text_split,
+            )
+        dataset_eval = PairedImageDirDataset(args.sar_test_path, args.opt_test_path, transform=None)
+        ensure_text_data(dataset_eval.sar_files, dataset_eval.opt_files, text_data_dir, args.llm_model_name)
         with torch.random.fork_rng():
             torch.manual_seed(seed)
             with torch.no_grad():
-                evaluate(model_without_ddp, args, 0, batch_size=args.gen_bsz, log_writer=log_writer)
+                evaluate(model_without_ddp, args, 0, batch_size=args.gen_bsz, log_writer=log_writer, text_data_dir=text_data_dir)
         return
 
     # Training loop
@@ -287,7 +311,7 @@ def main(args):
         if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
             torch.cuda.empty_cache()
             with torch.no_grad():
-                evaluate(model_without_ddp, args, epoch, batch_size=args.gen_bsz, log_writer=log_writer)
+                evaluate(model_without_ddp, args, epoch, batch_size=args.gen_bsz, log_writer=log_writer, text_data_dir=text_data_dir)
             torch.cuda.empty_cache()
 
         if misc.is_main_process() and log_writer is not None:
