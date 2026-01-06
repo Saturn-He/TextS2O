@@ -8,6 +8,7 @@ from typing import Iterable, List, Optional
 import requests
 import torch
 from PIL import Image
+from torchvision.transforms import functional as F
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
@@ -160,7 +161,13 @@ def load_texts_for_names(names, output_dir):
     return texts
 
 
-def ensure_text_data(sar_paths, opt_paths, output_dir, llm_model_name="Qwen2-VL-72B"):
+def _ensure_pil_image(image):
+    if isinstance(image, Image.Image):
+        return image
+    return F.to_pil_image(image)
+
+
+def ensure_text_data(sar_paths, opt_paths, output_dir, llm_model_name="Qwen2-VL-72B", transform=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     generator = QwenVLTextGenerator(model_name=llm_model_name)
@@ -169,5 +176,12 @@ def ensure_text_data(sar_paths, opt_paths, output_dir, llm_model_name="Qwen2-VL-
         if text_path.exists():
             continue
         opt_image = Image.open(opt_path).convert("RGB")
+        if transform is not None:
+            sar_image = Image.open(sar_path).convert("L")
+            try:
+                _sar_image, opt_image = transform(sar_image, opt_image, Path(sar_path).name)
+            except TypeError:
+                _sar_image, opt_image = transform(sar_image, opt_image)
+            opt_image = _ensure_pil_image(opt_image)
         text = generator.generate_text_for_image(opt_image)
         text_path.write_text(text, encoding="utf-8")
