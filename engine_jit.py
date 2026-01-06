@@ -14,7 +14,7 @@ import torch_fidelity
 import copy
 
 from util.datasets import ImageDirDataset
-from util.text_encoder import ClipTextEncoder, load_texts_for_names
+from util.text_encoder import ClipTextEncoder, TextConditioner
 
 
 def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, epoch, log_writer=None, args=None):
@@ -82,6 +82,11 @@ def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None, tex
     world_size = misc.get_world_size()
     local_rank = misc.get_rank()
     text_encoder = ClipTextEncoder(model_name=args.text_encoder_model, text_dim=args.text_dim)
+    text_conditioner = TextConditioner(
+        text_encoder=text_encoder,
+        text_data_dir=text_data_dir,
+        cfg_scale=args.cfg_text_scale,
+    )
 
     transform_eval = transforms.Compose([
         transforms.Resize((args.img_size, args.img_size)),
@@ -133,13 +138,11 @@ def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None, tex
         sar_img = sar_img.to(torch.float32).div_(255)
         sar_img = sar_img * 2.0 - 1.0
         labels_gen = torch.zeros(sar_img.size(0), device=sar_img.device, dtype=torch.long)
-        text_features = None
-        if text_data_dir is not None:
-            texts = load_texts_for_names(sar_names, text_data_dir)
-            text_features = text_encoder.encode_texts(texts).to(sar_img.device, dtype=torch.float32)
+        text_features = text_conditioner.get_text_features(sar_names, sar_img.device)
 
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            sampled_images = model_without_ddp.generate(sar_img, labels_gen, text_features=text_features)
+        with text_conditioner.cfg_scale_context(model_without_ddp):
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                sampled_images = model_without_ddp.generate(sar_img, labels_gen, text_features=text_features)
 
         torch.distributed.barrier()
 
