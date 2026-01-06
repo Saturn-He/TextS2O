@@ -2,6 +2,7 @@ import argparse
 import datetime
 import numpy as np
 import os
+import hashlib
 import random
 import time
 from pathlib import Path
@@ -26,16 +27,34 @@ class PairedTransform:
     def __init__(self, image_size, hflip_prob=0.5):
         self.image_size = image_size
         self.hflip_prob = hflip_prob
+        self.flip_decider = None
 
-    def __call__(self, sar_img, opt_img):
+    def with_flip_decider(self, flip_decider):
+        self.flip_decider = flip_decider
+        return self
+
+    def __call__(self, sar_img, opt_img, name=None):
         sar_img = F.resize(sar_img, [self.image_size, self.image_size])
         opt_img = F.resize(opt_img, [self.image_size, self.image_size])
-        if random.random() < self.hflip_prob:
+        if self.flip_decider is not None and name is not None:
+            do_flip = self.flip_decider(name)
+        else:
+            do_flip = random.random() < self.hflip_prob
+        if do_flip:
             sar_img = F.hflip(sar_img)
             opt_img = F.hflip(opt_img)
         sar_img = F.pil_to_tensor(sar_img)
         opt_img = F.pil_to_tensor(opt_img)
         return sar_img, opt_img
+
+
+def build_flip_decider(seed, hflip_prob):
+    def decide(name):
+        digest = hashlib.sha256(f"{seed}-{name}".encode("utf-8")).hexdigest()
+        value = int(digest[:8], 16) / 0xFFFFFFFF
+        return value < hflip_prob
+
+    return decide
 
 
 def get_args_parser():
@@ -176,10 +195,12 @@ def main(args):
         log_writer = None
 
     # Data augmentation transforms
+    hflip_prob = 0.5
+    flip_decider = build_flip_decider(args.seed, hflip_prob)
     transform_train = PairedTransform(
         image_size=args.img_size,
-        hflip_prob=0.5,
-    )
+        hflip_prob=hflip_prob,
+    ).with_flip_decider(flip_decider)
 
     text_data_dir = os.path.join(
         "/NAS_data/hjf/JiTtext/TextData",
@@ -193,7 +214,13 @@ def main(args):
         args.opt_train_path,
         transform=transform_train,
     )
-    ensure_text_data(dataset_train.sar_files, dataset_train.opt_files, text_data_dir, args.llm_model_name)
+    ensure_text_data(
+        dataset_train.sar_files,
+        dataset_train.opt_files,
+        text_data_dir,
+        args.llm_model_name,
+        transform=transform_train,
+    )
     text_inputs = load_texts_for_pairs(dataset_train.sar_files, text_data_dir)
     text_encoder = ClipTextEncoder(model_name=args.text_encoder_model, text_dim=args.text_dim)
     text_features = text_encoder.encode_texts(text_inputs)
@@ -275,7 +302,14 @@ def main(args):
                 args.text_split,
             )
         dataset_eval = PairedImageDirDataset(args.sar_test_path, args.opt_test_path, transform=None)
-        ensure_text_data(dataset_eval.sar_files, dataset_eval.opt_files, text_data_dir, args.llm_model_name)
+        transform_text_eval = PairedTransform(image_size=args.img_size, hflip_prob=0.0)
+        ensure_text_data(
+            dataset_eval.sar_files,
+            dataset_eval.opt_files,
+            text_data_dir,
+            args.llm_model_name,
+            transform=transform_text_eval,
+        )
         with torch.random.fork_rng():
             torch.manual_seed(seed)
             with torch.no_grad():
