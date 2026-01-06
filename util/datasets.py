@@ -1,7 +1,7 @@
-import os
 from pathlib import Path
 
 from PIL import Image
+import torch
 from torch.utils.data import Dataset
 
 
@@ -37,20 +37,32 @@ class ImageDirDataset(Dataset):
 
 
 class PairedImageDirDataset(Dataset):
-    def __init__(self, sar_root, opt_root, transform=None):
+    def __init__(self, sar_root, opt_root, transform=None, text_features=None):
         self.sar_root = sar_root
         self.opt_root = opt_root
         self.transform = transform
         self.sar_files = _list_images(sar_root)
         self.opt_files = _list_images(opt_root)
+        self.text_features = None
         if len(self.sar_files) != len(self.opt_files):
             raise ValueError("SAR and OPT datasets must be the same length.")
         for sar_path, opt_path in zip(self.sar_files, self.opt_files):
             if sar_path.name != opt_path.name:
                 raise ValueError(f"Mismatched filenames: {sar_path.name} vs {opt_path.name}")
+        if text_features is not None:
+            self.set_text_features(text_features)
 
     def __len__(self):
         return len(self.sar_files)
+
+    def set_text_features(self, text_features):
+        if text_features is None:
+            self.text_features = None
+            return
+        text_features = torch.as_tensor(text_features)
+        if len(text_features) != len(self.sar_files):
+            raise ValueError("Text features length must match dataset length.")
+        self.text_features = text_features
 
     def __getitem__(self, idx):
         sar_path = self.sar_files[idx]
@@ -63,4 +75,6 @@ class PairedImageDirDataset(Dataset):
             except TypeError:
                 sar_img = self.transform(sar_img)
                 opt_img = self.transform(opt_img)
-        return sar_img, opt_img
+        if self.text_features is None:
+            return sar_img, opt_img
+        return sar_img, opt_img, self.text_features[idx]
