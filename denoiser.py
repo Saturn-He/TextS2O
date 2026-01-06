@@ -16,11 +16,14 @@ class Denoiser(nn.Module):
             num_classes=args.class_num,
             attn_drop=args.attn_dropout,
             proj_drop=args.proj_dropout,
+            text_dim=args.text_dim,
         )
         self.img_size = args.img_size
         self.num_classes = args.class_num
+        self.text_dim = args.text_dim
 
         self.label_drop_prob = args.label_drop_prob
+        self.text_drop_prob = args.text_drop_prob
         self.P_mean = args.P_mean
         self.P_std = args.P_std
         self.t_eps = args.t_eps
@@ -43,14 +46,28 @@ class Denoiser(nn.Module):
         out = torch.where(drop, torch.full_like(labels, self.num_classes), labels)
         return out
 
+    def drop_text(self, text_features):
+        if text_features is None:
+            return None
+        drop = torch.rand(text_features.shape[0], device=text_features.device) < self.text_drop_prob
+        drop = drop.unsqueeze(1)
+        null_text = torch.zeros_like(text_features)
+        return torch.where(drop, null_text, text_features)
+
+    def null_text(self, batch_size, device):
+        return torch.zeros(batch_size, self.text_dim, device=device)
+
     def sample_t(self, n: int, device=None):
         z = torch.randn(n, device=device) * self.P_std + self.P_mean
         return torch.sigmoid(z)
 
-    def forward(self, opt_img, sar_img, labels=None):
+    def forward(self, opt_img, sar_img, text_features=None, labels=None):
         if labels is None:
             labels = torch.zeros(opt_img.size(0), device=opt_img.device, dtype=torch.long)
         labels_dropped = self.drop_labels(labels) if self.training else labels
+        if text_features is None:
+            text_features = self.null_text(opt_img.size(0), opt_img.device)
+        text_features = self.drop_text(text_features) if self.training else text_features
 
         t = self.sample_t(opt_img.size(0), device=opt_img.device).view(-1, *([1] * (opt_img.ndim - 1)))
         e = torch.randn_like(opt_img) * self.noise_scale
@@ -58,7 +75,7 @@ class Denoiser(nn.Module):
         z = t * opt_img + (1 - t) * e
         v = (opt_img - z) / (1 - t).clamp_min(self.t_eps)
 
-        x_pred = self.net(z, t.flatten(), labels_dropped, sar_img)
+        x_pred = self.net(z, t.flatten(), labels_dropped, sar_img, text_features)
         v_pred = (x_pred - z) / (1 - t).clamp_min(self.t_eps)
 
         # l2 loss
@@ -68,11 +85,13 @@ class Denoiser(nn.Module):
         return loss
 
     @torch.no_grad()
-    def generate(self, sar_img, labels=None):
+    def generate(self, sar_img, labels=None, text_features=None):
         if labels is None:
             labels = torch.zeros(sar_img.size(0), device=sar_img.device, dtype=torch.long)
         device = sar_img.device
         bsz = sar_img.size(0)
+        if text_features is None:
+            text_features = self.null_text(bsz, device)
         z = self.noise_scale * torch.randn(bsz, 3, self.img_size, self.img_size, device=device)
         timesteps = torch.linspace(0.0, 1.0, self.steps + 1, device=device).view(-1, *([1] * z.ndim)).expand(-1, bsz, -1, -1, -1)
 
@@ -87,19 +106,22 @@ class Denoiser(nn.Module):
         for i in range(self.steps - 1):
             t = timesteps[i]
             t_next = timesteps[i + 1]
-            z = stepper(z, t, t_next, labels, sar_img)
+            z = stepper(z, t, t_next, labels, sar_img, text_features)
         # last step euler
-        z = self._euler_step(z, timesteps[-2], timesteps[-1], labels, sar_img)
+        z = self._euler_step(z, timesteps[-2], timesteps[-1], labels, sar_img, text_features)
         return z
 
     @torch.no_grad()
-    def _forward_sample(self, z, t, labels, sar_img):
+    def _forward_sample(self, z, t, labels, sar_img, text_features):
+        if text_features is None:
+            text_features = self.null_text(z.size(0), z.device)
         # conditional
-        x_cond = self.net(z, t.flatten(), labels, sar_img)
+        x_cond = self.net(z, t.flatten(), labels, sar_img, text_features)
         v_cond = (x_cond - z) / (1.0 - t).clamp_min(self.t_eps)
 
         # unconditional
-        x_uncond = self.net(z, t.flatten(), torch.full_like(labels, self.num_classes), sar_img)
+        null_text = self.null_text(z.size(0), z.device)
+        x_uncond = self.net(z, t.flatten(), torch.full_like(labels, self.num_classes), sar_img, null_text)
         v_uncond = (x_uncond - z) / (1.0 - t).clamp_min(self.t_eps)
 
         # cfg interval
@@ -110,17 +132,17 @@ class Denoiser(nn.Module):
         return v_uncond + cfg_scale_interval * (v_cond - v_uncond)
 
     @torch.no_grad()
-    def _euler_step(self, z, t, t_next, labels, sar_img):
-        v_pred = self._forward_sample(z, t, labels, sar_img)
+    def _euler_step(self, z, t, t_next, labels, sar_img, text_features):
+        v_pred = self._forward_sample(z, t, labels, sar_img, text_features)
         z_next = z + (t_next - t) * v_pred
         return z_next
 
     @torch.no_grad()
-    def _heun_step(self, z, t, t_next, labels, sar_img):
-        v_pred_t = self._forward_sample(z, t, labels, sar_img)
+    def _heun_step(self, z, t, t_next, labels, sar_img, text_features):
+        v_pred_t = self._forward_sample(z, t, labels, sar_img, text_features)
 
         z_next_euler = z + (t_next - t) * v_pred_t
-        v_pred_t_next = self._forward_sample(z_next_euler, t_next, labels, sar_img)
+        v_pred_t_next = self._forward_sample(z_next_euler, t_next, labels, sar_img, text_features)
 
         v_pred = 0.5 * (v_pred_t + v_pred_t_next)
         z_next = z + (t_next - t) * v_pred
