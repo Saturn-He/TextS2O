@@ -28,19 +28,26 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
 
-    for data_iter_step, (sar_img, opt_img) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for data_iter_step, batch in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # per iteration (instead of per epoch) lr scheduler
         lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
 
         # normalize image to [-1, 1]
+        if len(batch) == 3:
+            sar_img, opt_img, text_features = batch
+        else:
+            sar_img, opt_img = batch
+            text_features = None
         sar_img = sar_img.to(device, non_blocking=True).to(torch.float32).div_(255)
         sar_img = sar_img * 2.0 - 1.0
         opt_img = opt_img.to(device, non_blocking=True).to(torch.float32).div_(255)
         opt_img = opt_img * 2.0 - 1.0
+        if text_features is not None:
+            text_features = text_features.to(device, non_blocking=True).to(torch.float32)
         labels = torch.zeros(opt_img.size(0), device=device, dtype=torch.long)
 
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            loss = model(opt_img, sar_img, labels)
+            loss = model(opt_img, sar_img, text_features, labels)
 
         loss_value = loss.item()
         if not math.isfinite(loss_value):
@@ -126,7 +133,7 @@ def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None):
         labels_gen = torch.zeros(sar_img.size(0), device=sar_img.device, dtype=torch.long)
 
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            sampled_images = model_without_ddp.generate(sar_img, labels_gen)
+            sampled_images = model_without_ddp.generate(sar_img, labels_gen, text_features=None)
 
         torch.distributed.barrier()
 
