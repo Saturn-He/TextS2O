@@ -19,6 +19,7 @@ from engine_jit import train_one_epoch, evaluate
 
 from denoiser import Denoiser
 from util.datasets import PairedImageDirDataset
+from util.text_encoder import ClipTextEncoder
 
 
 class PairedTransform:
@@ -72,6 +73,11 @@ def get_args_parser():
     parser.add_argument('--noise_scale', default=1.0, type=float)
     parser.add_argument('--t_eps', default=5e-2, type=float)
     parser.add_argument('--label_drop_prob', default=0.1, type=float)
+    parser.add_argument('--text_drop_prob', default=0.1, type=float)
+    parser.add_argument('--text_dim', default=768, type=int,
+                        help='Dimensionality of CLIP text features (pooler output).')
+    parser.add_argument('--text_encoder_model', default='openai/clip-vit-large-patch14', type=str,
+                        help='CLIP text encoder model name.')
 
     parser.add_argument('--seed', default=77, type=int)
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
@@ -172,6 +178,10 @@ def main(args):
         args.opt_train_path,
         transform=transform_train,
     )
+    text_encoder = ClipTextEncoder(model_name=args.text_encoder_model, text_dim=args.text_dim)
+    text_inputs = text_encoder.fetch_texts_for_pairs(dataset_train.sar_files, dataset_train.opt_files)
+    text_features = text_encoder.encode_texts(text_inputs)
+    dataset_train.set_text_features(text_features)
     print(dataset_train)
 
     sampler_train = torch.utils.data.DistributedSampler(
