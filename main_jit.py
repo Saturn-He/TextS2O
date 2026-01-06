@@ -20,7 +20,7 @@ from engine_jit import train_one_epoch, evaluate
 
 from denoiser import Denoiser
 from util.datasets import PairedImageDirDataset
-from util.text_encoder import ClipTextEncoder, ensure_text_data, load_texts_for_pairs
+from util.text_encoder import ClipTextEncoder, SYSTEM_PROMPT_EN, ensure_text_data, load_texts_for_pairs
 
 
 class PairedTransform:
@@ -99,6 +99,8 @@ def get_args_parser():
                         help='CLIP text encoder model name.')
     parser.add_argument('--llm_model_name', default='Qwen2-VL-72B', type=str,
                         help='LLM model name for text generation.')
+    parser.add_argument('--qwen_prompt', default=SYSTEM_PROMPT_EN, type=str,
+                        help='Prompt for the Qwen VL API.')
     parser.add_argument('--dataset_name', default='sar2opt', choices=['GF3', 'sar2opt', 'scene'],
                         help='Dataset name for text storage.')
     parser.add_argument('--text_split', default='train', choices=['train', 'test'],
@@ -219,6 +221,7 @@ def main(args):
         dataset_train.opt_files,
         text_data_dir,
         args.llm_model_name,
+        args.qwen_prompt,
         transform=transform_train,
     )
     text_inputs = load_texts_for_pairs(dataset_train.sar_files, text_data_dir)
@@ -308,6 +311,7 @@ def main(args):
             dataset_eval.opt_files,
             text_data_dir,
             args.llm_model_name,
+            args.qwen_prompt,
             transform=transform_text_eval,
         )
         with torch.random.fork_rng():
