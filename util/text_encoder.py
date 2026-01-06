@@ -1,32 +1,136 @@
+import base64
+import io
+import os
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterable, List, Optional
 
+import requests
 import torch
 from PIL import Image
+from transformers import CLIPTextModel, CLIPTokenizer
 
 
 class ClipTextEncoder:
-    def __init__(self, model_name="openai/clip-vit-large-patch14", text_dim=768):
+    def __init__(
+        self,
+        model_name="openai/clip-vit-large-patch14",
+        text_dim=768,
+        device="cpu",
+        batch_size=32,
+    ):
         self.model_name = model_name
         self.text_dim = text_dim
+        self.device = torch.device(device)
+        self.batch_size = batch_size
+        self.tokenizer = CLIPTokenizer.from_pretrained(model_name)
+        self.model = CLIPTextModel.from_pretrained(model_name)
+        self.model.eval().to(self.device)
 
-    def encode_texts(self, texts):
-        """
-        Placeholder for CLIP-ViT-L/14 text encoding.
-        Replace this stub with actual encoding logic.
-        """
-        return torch.zeros(len(texts), self.text_dim)
+    @torch.no_grad()
+    def encode_texts(
+        self,
+        texts: Iterable[str],
+        device: Optional[torch.device] = None,
+        output_device: Optional[torch.device] = None,
+    ) -> torch.Tensor:
+        texts = list(texts)
+        if not texts:
+            return torch.empty(0, self.text_dim)
+        device = torch.device(device) if device is not None else self.device
+        output_device = torch.device(output_device) if output_device is not None else torch.device("cpu")
+        if device != self.device:
+            self.model.to(device)
+            self.device = device
+        features: List[torch.Tensor] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch_texts = texts[start:start + self.batch_size]
+            inputs = self.tokenizer(batch_texts, padding=True, truncation=True, return_tensors="pt")
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = self.model(**inputs)
+            pooled = outputs.pooler_output
+            if pooled.shape[-1] != self.text_dim:
+                raise ValueError(
+                    f"CLIP text dim mismatch: expected {self.text_dim}, got {pooled.shape[-1]}"
+                )
+            features.append(pooled.detach().to(output_device))
+        return torch.cat(features, dim=0)
 
 
 class QwenVLTextGenerator:
-    def __init__(self, model_name="Qwen2-VL-72B"):
+    def __init__(
+        self,
+        model_name="Qwen2-VL-72B",
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        prompt: str = "请用简洁中文描述这张图像的场景与主体。",
+        timeout: int = 60,
+    ):
         self.model_name = model_name
+        self.api_key = api_key or os.environ.get("QWEN_VL_API_KEY")
+        self.api_base = api_base or os.environ.get("QWEN_VL_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.prompt = prompt
+        self.timeout = timeout
 
-    def generate_text_for_image(self, image):
-        """
-        Placeholder for Qwen2-VL-72B API call.
-        Replace this stub with actual API interaction.
-        """
-        return ""
+    def _image_to_base64(self, image: Image.Image) -> str:
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG")
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    def generate_text_for_image(self, image: Image.Image) -> str:
+        if not self.api_key:
+            raise ValueError("Missing QWEN_VL_API_KEY for Qwen2-VL-72B API access.")
+        encoded = self._image_to_base64(image)
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": self.prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+                    ],
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": 256,
+        }
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        url = f"{self.api_base}/chat/completions"
+        response = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+        response.raise_for_status()
+        data = response.json()
+        message = data["choices"][0]["message"]["content"]
+        if isinstance(message, list):
+            message = "".join(chunk.get("text", "") for chunk in message)
+        return str(message).strip()
+
+
+class TextConditioner:
+    def __init__(self, text_encoder: ClipTextEncoder, text_data_dir: Optional[Path] = None,
+                 cfg_scale: Optional[float] = None):
+        self.text_encoder = text_encoder
+        self.text_data_dir = Path(text_data_dir) if text_data_dir is not None else None
+        self.cfg_scale = cfg_scale
+
+    def get_text_features(self, names: Iterable[str], device: torch.device) -> Optional[torch.Tensor]:
+        if self.text_data_dir is None:
+            return None
+        texts = load_texts_for_names(names, self.text_data_dir)
+        text_features = self.text_encoder.encode_texts(texts, device=device, output_device=device)
+        return text_features.to(device=device, dtype=torch.float32)
+
+    @contextmanager
+    def cfg_scale_context(self, model) -> Iterable[None]:
+        if self.cfg_scale is None:
+            yield
+            return
+        original = model.cfg_scale
+        model.cfg_scale = self.cfg_scale
+        try:
+            yield
+        finally:
+            model.cfg_scale = original
 
 
 def _text_path_for_sar(sar_path, output_dir):
