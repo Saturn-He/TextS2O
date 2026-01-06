@@ -14,6 +14,10 @@ def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
+def apply_text_adaln(x, gamma, beta):
+    return gamma.unsqueeze(1) * x + beta.unsqueeze(1)
+
+
 class BottleneckPatchEmbed(nn.Module):
     """ Image to Patch Embedding
     """
@@ -222,25 +226,33 @@ class FinalLayer(nn.Module):
     """
     The final layer of JiT.
     """
-    def __init__(self, hidden_size, patch_size, out_channels):
+    def __init__(self, hidden_size, patch_size, out_channels, text_dim=768):
         super().__init__()
         self.norm_final = RMSNorm(hidden_size)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+        self.text_adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(text_dim, 2 * hidden_size, bias=True)
+        )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
 
     @torch.compile
-    def forward(self, x, c):
+    def forward(self, x, c, text_features=None):
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
-        x = modulate(self.norm_final(x), shift, scale)
+        x = self.norm_final(x)
+        if text_features is not None:
+            gamma_txt, beta_txt = self.text_adaLN_modulation(text_features).chunk(2, dim=1)
+            x = apply_text_adaln(x, gamma_txt, beta_txt)
+        x = modulate(x, shift, scale)
         x = self.linear(x)
         return x
 
 
 class JiTBlock(nn.Module):
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, attn_drop=0.0, proj_drop=0.0):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, attn_drop=0.0, proj_drop=0.0, text_dim=768):
         super().__init__()
         self.norm1 = RMSNorm(hidden_size, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=True,
@@ -252,18 +264,37 @@ class JiTBlock(nn.Module):
         self.norm2 = RMSNorm(hidden_size, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         self.mlp = SwiGLUFFN(hidden_size, mlp_hidden_dim, drop=proj_drop)
+        self.text_adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(text_dim, 6 * hidden_size, bias=True)
+        )
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
     @torch.compile
-    def forward(self, x,  c, feat_rope=None, sar_tokens=None, sar_rope=None):
+    def forward(self, x,  c, text_features=None, feat_rope=None, sar_tokens=None, sar_rope=None):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), rope=feat_rope)
+        if text_features is not None:
+            gamma_msa, beta_msa, gamma_ca, beta_ca, gamma_mlp, beta_mlp = (
+                self.text_adaLN_modulation(text_features).chunk(6, dim=-1)
+            )
+        else:
+            gamma_msa = beta_msa = gamma_ca = beta_ca = gamma_mlp = beta_mlp = None
+        norm1 = self.norm1(x)
+        if gamma_msa is not None:
+            norm1 = apply_text_adaln(norm1, gamma_msa, beta_msa)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(norm1, shift_msa, scale_msa), rope=feat_rope)
         if sar_tokens is not None:
-            x = x + self.ca_scale * self.cross_attn(self.norm_ca(x), sar_tokens, rope=feat_rope, context_rope=sar_rope)
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+            norm_ca = self.norm_ca(x)
+            if gamma_ca is not None:
+                norm_ca = apply_text_adaln(norm_ca, gamma_ca, beta_ca)
+            x = x + self.ca_scale * self.cross_attn(norm_ca, sar_tokens, rope=feat_rope, context_rope=sar_rope)
+        norm2 = self.norm2(x)
+        if gamma_mlp is not None:
+            norm2 = apply_text_adaln(norm2, gamma_mlp, beta_mlp)
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(norm2, shift_mlp, scale_mlp))
         return x
 
 
@@ -286,7 +317,8 @@ class JiT(nn.Module):
         num_classes=1000,
         bottleneck_dim=128,
         in_context_len=32,
-        in_context_start=8
+        in_context_start=8,
+        text_dim=768
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -300,6 +332,7 @@ class JiT(nn.Module):
         self.in_context_len = in_context_len
         self.in_context_start = in_context_start
         self.num_classes = num_classes
+        self.text_dim = text_dim
 
         # time and class embed
         self.t_embedder = TimestepEmbedder(hidden_size)
@@ -336,12 +369,13 @@ class JiT(nn.Module):
         self.blocks = nn.ModuleList([
             JiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio,
                      attn_drop=attn_drop if (depth // 4 * 3 > i >= depth // 4) else 0.0,
-                     proj_drop=proj_drop if (depth // 4 * 3 > i >= depth // 4) else 0.0)
+                     proj_drop=proj_drop if (depth // 4 * 3 > i >= depth // 4) else 0.0,
+                     text_dim=text_dim)
             for i in range(depth)
         ])
 
         # linear predict
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels, text_dim=text_dim)
 
         self.initialize_weights()
 
@@ -380,10 +414,21 @@ class JiT(nn.Module):
         for block in self.blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+            nn.init.constant_(block.text_adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.text_adaLN_modulation[-1].bias, 0)
+            with torch.no_grad():
+                bias = block.text_adaLN_modulation[-1].bias
+                bias[:self.hidden_size].fill_(1)
+                bias[2 * self.hidden_size:3 * self.hidden_size].fill_(1)
+                bias[4 * self.hidden_size:5 * self.hidden_size].fill_(1)
 
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.text_adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.text_adaLN_modulation[-1].bias, 0)
+        with torch.no_grad():
+            self.final_layer.text_adaLN_modulation[-1].bias[:self.hidden_size].fill_(1)
 
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
@@ -402,7 +447,7 @@ class JiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, y, sar_img=None):
+    def forward(self, x, t, y, sar_img=None, text_features=None):
         """
         x: (N, C, H, W)
         t: (N,)
@@ -428,11 +473,11 @@ class JiT(nn.Module):
                 in_context_tokens += self.in_context_posemb
                 x = torch.cat([in_context_tokens, x], dim=1)
             feat_rope = self.feat_rope if i < self.in_context_start else self.feat_rope_incontext
-            x = block(x, c, feat_rope, sar_tokens=sar_tokens, sar_rope=self.feat_rope)
+            x = block(x, c, text_features, feat_rope, sar_tokens=sar_tokens, sar_rope=self.feat_rope)
 
         x = x[:, self.in_context_len:]
 
-        x = self.final_layer(x, c)
+        x = self.final_layer(x, c, text_features)
         output = self.unpatchify(x, self.patch_size)
 
         return output
