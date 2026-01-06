@@ -105,6 +105,8 @@ def get_args_parser():
                         help='Dataset name for text storage.')
     parser.add_argument('--text_split', default='train', choices=['train', 'test'],
                         help='Text split name for storage.')
+    parser.add_argument('--disable_hflip', action='store_true',
+                        help='Disable horizontal flip augmentation for SAR/optical pairs during training.')
 
     parser.add_argument('--seed', default=77, type=int)
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
@@ -197,7 +199,7 @@ def main(args):
         log_writer = None
 
     # Data augmentation transforms
-    hflip_prob = 0.5
+    hflip_prob = 0.0 if args.disable_hflip else 0.5
     flip_decider = build_flip_decider(args.seed, hflip_prob)
     transform_train = PairedTransform(
         image_size=args.img_size,
