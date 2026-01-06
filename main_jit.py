@@ -101,6 +101,8 @@ def get_args_parser():
                         help='Sampling steps')
     parser.add_argument('--cfg', default=1.0, type=float,
                         help='Classifier-free guidance factor')
+    parser.add_argument('--cfg_text_scale', default=None, type=float,
+                        help='Optional CFG scale override when using text conditioning during inference.')
     parser.add_argument('--interval_min', default=0.0, type=float,
                         help='CFG interval min')
     parser.add_argument('--interval_max', default=1.0, type=float,
