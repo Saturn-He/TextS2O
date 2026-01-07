@@ -97,6 +97,8 @@ def get_args_parser():
                         help='Dimensionality of CLIP text features (pooler output).')
     parser.add_argument('--text_encoder_model', default='openai/clip-vit-large-patch14', type=str,
                         help='CLIP text encoder model name.')
+    parser.add_argument('--text_encoder_path', default='', type=str,
+                        help='Local path to CLIP text encoder weights/tokenizer (overrides text_encoder_model).')
     parser.add_argument('--llm_model_name', default='qwen3-vl-plus', type=str,
                         help='LLM model name for text generation.')
     parser.add_argument('--qwen_prompt', default=SYSTEM_PROMPT_EN, type=str,
