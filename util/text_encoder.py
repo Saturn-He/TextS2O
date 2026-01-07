@@ -80,7 +80,7 @@ Required Vocabulary:
 class QwenVLTextGenerator:
     def __init__(
         self,
-        model_name="Qwen2-VL-72B",
+        model_name="qwen3-vl-plus",
         api_key: Optional[str] = "sk-e65c52e75ee74698b15da25033d1c2c1",
         api_base: Optional[str] = None,
         prompt: str = SYSTEM_PROMPT_EN,
