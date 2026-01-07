@@ -22,11 +22,7 @@ CUDA_VISIBLE_DEVICES=7 torchrun --nproc_per_node=1 --master-port=29501 main_jit.
 
 ### Train on SAR2Opt:
 
-CUDA_VISIBLE_DEVICES=7 torchrun --nproc_per_node=1 --master-port=29506 main_jit.py \
-  --output_dir "/NAS_data/hjf/JiTtext/checkpoints/SAR2Opt/caJiT/round1" \
-  --sar_train_path "/NAS_data/yjy/Parallel-GAN-main/Parallel-GAN-main/datasets/sar2opt/trainA" \
-  --opt_train_path "/NAS_data/yjy/Parallel-GAN-main/Parallel-GAN-main/datasets/sar2opt/trainB" \
-  --img_size 512
+CUDA_VISIBLE_DEVICES=7 torchrun --nproc_per_node=1 --master-port=29506 main_jit.py   --output_dir "/NAS_data/hjf/JiTtext/checkpoints/SAR2Opt/caJiT/round1"   --sar_train_path "/NAS_data/yjy/Parallel-GAN-main/Parallel-GAN-main/datasets/sar2opt/trainA"   --opt_train_path "/NAS_data/yjy/Parallel-GAN-main/Parallel-GAN-main/datasets/sar2opt/trainB"   --img_size 512  --text_encoder_path "/NAS_data/hjf/clip-vit-large-patch14"
 
 
 ### Train on SEN-SCENE:
