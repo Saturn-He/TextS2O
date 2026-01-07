@@ -48,14 +48,15 @@ class ClipTextEncoder:
         texts = list(texts)
         if not texts:
             return torch.empty(0, self.text_dim)
+        batch_size = getattr(self, "batch_size", 32)
         device = torch.device(device) if device is not None else self.device
         output_device = torch.device(output_device) if output_device is not None else torch.device("cpu")
         if device != self.device:
             self.model.to(device)
             self.device = device
         features: List[torch.Tensor] = []
-        for start in range(0, len(texts), self.batch_size):
-            batch_texts = texts[start:start + self.batch_size]
+        for start in range(0, len(texts), batch_size):
+            batch_texts = texts[start:start + batch_size]
             inputs = self.tokenizer(batch_texts, padding=True, truncation=True, return_tensors="pt")
             inputs = {k: v.to(device) for k, v in inputs.items()}
             outputs = self.model(**inputs)
