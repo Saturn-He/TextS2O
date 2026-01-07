@@ -19,12 +19,22 @@ class ClipTextEncoder:
         text_dim=768,
         device="cpu",
         batch_size=32,
+        local_files_only: Optional[bool] = None,
     ):
         self.model_name = model_name
         self.text_dim = text_dim
         self.device = torch.device(device)
-        self.batch_size = batch_size
-        self.tokenizer = CLIPTokenizer.from_pretrained(model_name)
+        resolved_model_name = str(Path(model_name).expanduser()) if Path(model_name).exists() else model_name
+        if local_files_only is None:
+            local_files_only = Path(resolved_model_name).exists()
+        self.tokenizer = CLIPTokenizer.from_pretrained(
+            resolved_model_name,
+            local_files_only=local_files_only,
+        )
+        self.model = CLIPTextModel.from_pretrained(
+            resolved_model_name,
+            local_files_only=local_files_only,
+        )
         self.model = CLIPTextModel.from_pretrained(model_name)
         self.model.eval().to(self.device)
 
