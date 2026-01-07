@@ -229,7 +229,8 @@ def main(args):
         transform=transform_train,
     )
     text_inputs = load_texts_for_pairs(dataset_train.sar_files, text_data_dir)
-    text_encoder = ClipTextEncoder(model_name=args.text_encoder_model, text_dim=args.text_dim)
+    text_encoder_source = args.text_encoder_path or args.text_encoder_model
+    text_encoder = ClipTextEncoder(model_name=text_encoder_source, text_dim=args.text_dim)
     text_features = text_encoder.encode_texts(text_inputs)
     dataset_train.set_text_features(text_features)
     print(dataset_train)
