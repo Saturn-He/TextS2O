@@ -81,7 +81,8 @@ def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None, tex
     model_without_ddp.eval()
     world_size = misc.get_world_size()
     local_rank = misc.get_rank()
-    text_encoder = ClipTextEncoder(model_name=args.text_encoder_model, text_dim=args.text_dim)
+    text_encoder_source = args.text_encoder_path or args.text_encoder_model
+    text_encoder = ClipTextEncoder(model_name=text_encoder_source, text_dim=args.text_dim)
     text_conditioner = TextConditioner(
         text_encoder=text_encoder,
         text_data_dir=text_data_dir,
