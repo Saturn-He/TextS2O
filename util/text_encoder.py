@@ -35,7 +35,6 @@ class ClipTextEncoder:
             resolved_model_name,
             local_files_only=local_files_only,
         )
-        self.model = CLIPTextModel.from_pretrained(model_name)
         self.model.eval().to(self.device)
 
     @torch.no_grad()
