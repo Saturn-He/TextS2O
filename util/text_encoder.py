@@ -12,6 +12,14 @@ from torchvision.transforms import functional as F
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
+def resolve_text_encoder_source(text_encoder_path: str, text_encoder_model: str) -> tuple[str, bool]:
+    if text_encoder_path:
+        resolved_path = Path(text_encoder_path).expanduser()
+        if resolved_path.exists():
+            return str(resolved_path), True
+    return text_encoder_model, False
+
+
 class ClipTextEncoder:
     def __init__(
         self,
