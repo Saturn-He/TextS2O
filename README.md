@@ -30,6 +30,8 @@ CUDA_VISIBLE_DEVICES=7 torchrun --nproc_per_node=1 --master_port=29504 main_jit.
 
 CUDA_VISIBLE_DEVICES=7 torchrun --nproc_per_node=1 --master_port=29506 main_jit.py --evaluate_gen --resume /NAS_data/hjf/JiTcolor/checkpoints/SAR2Opt/concat/round3 --sar_test_path /NAS_data/yjy/Parallel-GAN-main/Parallel-GAN-main/datasets/sar2opt/testA --output_dir /NAS_data/hjf/JiTcolor/outputs/SAR2Opt/concat/round3 --img_size 512 --gen_bsz 8 --keep_outputs
 
+CUDA_VISIBLE_DEVICES=7 torchrun --nproc_per_node=1 --master-port=29506 main_jit.py --evaluate_gen --resume "/NAS_data/hjf/JiTtext/checkpoints/SAR2Opt/caJiT/round1" --sar_test_path /NAS_data/yjy/Parallel-GAN-main/Parallel-GAN-main/datasets/sar2opt/testA --img_size 512  --output_dir /NAS_data/hjf/JiTtext/outputs/SAR2Opt/caJiT/round1 --gen_bsz 8 --keep_outputs --text_encoder_path "/NAS_data/hjf/clip-vit-large-patch14" 
+
 
 ### Inference on GF3：
 
