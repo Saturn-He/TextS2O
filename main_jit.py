@@ -20,7 +20,7 @@ from engine_jit import train_one_epoch, evaluate
 
 from denoiser import Denoiser
 from util.datasets import PairedImageDirDataset
-from util.text_encoder import ClipTextEncoder, SYSTEM_PROMPT_EN, ensure_text_data, load_texts_for_pairs
+from util.text_encoder import ClipTextEncoder, SYSTEM_PROMPT_EN, ensure_text_data, load_texts_for_pairs, resolve_text_encoder_source
 
 
 class PairedTransform:
@@ -229,8 +229,15 @@ def main(args):
         transform=transform_train,
     )
     text_inputs = load_texts_for_pairs(dataset_train.sar_files, text_data_dir)
-    text_encoder_source = args.text_encoder_path or args.text_encoder_model
-    text_encoder = ClipTextEncoder(model_name=text_encoder_source, text_dim=args.text_dim)
+    text_encoder_source, local_files_only = resolve_text_encoder_source(
+        args.text_encoder_path,
+        args.text_encoder_model,
+    )
+    text_encoder = ClipTextEncoder(
+        model_name=text_encoder_source,
+        text_dim=args.text_dim,
+        local_files_only=local_files_only,
+    )
     text_features = text_encoder.encode_texts(text_inputs)
     dataset_train.set_text_features(text_features)
     print(dataset_train)
