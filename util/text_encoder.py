@@ -12,6 +12,28 @@ from torchvision.transforms import functional as F
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
+def _has_clip_text_encoder_files(path: Path) -> bool:
+    if not path.exists():
+        return False
+    if path.is_file():
+        return True
+    config = path / "config.json"
+    model_weights = [
+        path / "pytorch_model.bin",
+        path / "model.safetensors",
+    ]
+    tokenizer_files = [
+        path / "tokenizer.json",
+        path / "vocab.json",
+    ]
+    merges = path / "merges.txt"
+    has_model = config.exists() and any(p.exists() for p in model_weights)
+    has_tokenizer = (path / "tokenizer.json").exists() or (
+        (path / "vocab.json").exists() and merges.exists()
+    )
+    return has_model and has_tokenizer
+    
+
 def resolve_text_encoder_source(text_encoder_path: str, text_encoder_model: str) -> tuple[str, bool]:
     if text_encoder_path:
         resolved_path = Path(text_encoder_path).expanduser()
